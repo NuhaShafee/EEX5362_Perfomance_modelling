@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Food Delivery Dispatch Simulation</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    margin: 2rem;
+    background-color: #f7f9fc;
+  }
+  h1 {
+    color: #333;
+    text-align: center;
+  }
+  .controls, .results {
+    max-width: 800px;
+    margin: 1rem auto;
+    background: white;
+    padding: 1rem 2rem;
+    border-radius: 10px;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.1);
+  }
+  label { display: block; margin: 0.5rem 0 0.2rem; }
+  input {
+    width: 100%;
+    padding: 0.5rem;
+  }
+  button {
+    margin-top: 1rem;
+    padding: 0.7rem 1.5rem;
+    background: #007bff;
+    border: none;
+    color: white;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  button:hover { background: #0056b3; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+  }
+  th, td {
+    border: 1px solid #ddd;
+    padding: 0.6rem;
+    text-align: center;
+  }
+  th {
+    background: #f1f3f6;
+  }
+</style>
+</head>
+<body>
+
+<h1>🍔 Food Delivery Dispatch Simulation</h1>
+
+<div class="controls">
+  <h2>Simulation Parameters</h2>
+  <label>Simulation Duration (hours):</label>
+  <input type="number" id="simHours" value="8">
+
+  <label>Order Arrival Rate (orders/hour):</label>
+  <input type="number" id="lambdaPerHour" value="30">
+
+  <label>Number of Drivers:</label>
+  <input type="number" id="numDrivers" value="10">
+
+  <label>Average Delivery Time (minutes):</label>
+  <input type="number" id="serviceMean" value="25">
+
+  <button onclick="runSimulation()">Run Simulation</button>
+</div>
+
+<div class="results" id="results" style="display:none;">
+  <h2>Simulation Results</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Metric</th>
+        <th>Value</th>
+      </tr>
+    </thead>
+    <tbody id="resultsTable">
+    </tbody>
+  </table>
+</div>
+
+<script>
+function runSimulation() {
+  const simHours = parseFloat(document.getElementById("simHours").value);
+  const lambdaPerHour = parseFloat(document.getElementById("lambdaPerHour").value);
+  const numDrivers = parseInt(document.getElementById("numDrivers").value);
+  const serviceMean = parseFloat(document.getElementById("serviceMean").value);
+
+  const lambdaPerMin = lambdaPerHour / 60;
+  const simEnd = simHours * 60;
+
+  let now = 0;
+  let eventList = [];
+  let queue = [];
+  let drivers = Array(numDrivers).fill().map(() => ({ busy: false, busyUntil: 0 }));
+
+  // Stats
+  let delivered = 0;
+  let totalDeliveryTime = 0;
+  let totalWaitTime = 0;
+  let areaQueue = 0;
+  let lastTime = 0;
+
+  function expRand(mean) {
+    return -mean * Math.log(1 - Math.random());
+  }
+
+  // Schedule first arrival
+  eventList.push({ time: expRand(1 / lambdaPerMin), type: "arrival" });
+
+  while (eventList.length > 0) {
+    eventList.sort((a, b) => a.time - b.time);
+    const ev = eventList.shift();
+    if (ev.time > simEnd) break;
+
+    // Update queue area for average queue length
+    areaQueue += queue.length * (ev.time - lastTime);
+    lastTime = ev.time;
+    now = ev.time;
+
+    if (ev.type === "arrival") {
+      // Check for available driver
+      const driver = drivers.find(d => !d.busy || d.busyUntil <= now);
+      if (driver) {
+        driver.busy = true;
+        driver.busyUntil = now + expRand(serviceMean);
+        eventList.push({ time: driver.busyUntil, type: "departure", start: now });
+        delivered++;
+        totalWaitTime += 0;
+        totalDeliveryTime += driver.busyUntil - now;
+      } else {
+        queue.push({ arrival: now });
+      }
+      // Schedule next order
+      eventList.push({ time: now + expRand(1 / lambdaPerMin), type: "arrival" });
+    } else if (ev.type === "departure") {
+      // Free a driver
+      const driver = drivers.find(d => d.busyUntil === ev.time);
+      if (driver) driver.busy = false;
+
+      if (queue.length > 0) {
+        const order = queue.shift();
+        const wait = now - order.arrival;
+        totalWaitTime += wait;
+        const serviceTime = expRand(serviceMean);
+        totalDeliveryTime += wait + serviceTime;
+        delivered++;
+        if (driver) {
+          driver.busy = true;
+          driver.busyUntil = now + serviceTime;
+          eventList.push({ time: driver.busyUntil, type: "departure", start: now });
+        }
+      }
+    }
+  }
+
+  const avgDelivery = delivered > 0 ? totalDeliveryTime / delivered : 0;
+  const avgWait = delivered > 0 ? totalWaitTime / delivered : 0;
+  const avgQueue = areaQueue / simEnd;
+  const utilization = (drivers.reduce((acc, d) => acc + Math.min(d.busyUntil, simEnd), 0) / (numDrivers * simEnd)) * 100;
+  const throughput = delivered / simHours;
+
+  const results = {
+    "Total Deliveries Completed": delivered,
+    "Average Delivery Time (min)": avgDelivery.toFixed(2),
+    "Average Wait Time (min)": avgWait.toFixed(2),
+    "Average Queue Length": avgQueue.toFixed(2),
+    "Driver Utilization (%)": utilization.toFixed(1),
+    "Throughput (orders/hour)": throughput.toFixed(2)
+  };
+
+  const tbody = document.getElementById("resultsTable");
+  tbody.innerHTML = "";
+  Object.keys(results).forEach(k => {
+    const row = document.createElement("tr");
+    row.innerHTML = `<td>${k}</td><td>${results[k]}</td>`;
+    tbody.appendChild(row);
+  });
+
+  document.getElementById("results").style.display = "block";
+}
+</script>
+
+</body>
+</html>
